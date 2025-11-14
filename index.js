@@ -1,4 +1,3 @@
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -54,7 +53,7 @@ Frase del usuario: "${text}"
     res.json({ ok: true, parsed });
 
   } catch (err) {
-    console.error(err);
+    console.error("SERVER ERROR:", err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
