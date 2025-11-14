@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 // Inicializa Gemini correctamente
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(process.env.example);
 const model = genAI.getGenerativeModel({
   model: "gemini-1.5-flash"
 });
