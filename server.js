@@ -1,4 +1,4 @@
-/*import express from 'express';
+import express from 'express';
 import fetch from 'node-fetch';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -34,77 +34,6 @@ app.post('/api/generate', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, ()=>console.log(`Servidor proxy listo en puerto ${PORT}`));*/
+app.listen(PORT, ()=>console.log(`Servidor proxy listo en puerto ${PORT}`));
 
-// server.js - ES Module puro para Node 22+
-import express from 'express';
-import cors from 'cors';
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Agenda persistente
-let agendaPersistente = [];
-
-app.post('/api/generate', async (req, res) => {
-  const { prompt } = req.body;
-
-  try {
-    const contextText = agendaPersistente
-      .map(t => `${t.fecha} ${t.hora}: ${t.titulo} - ${t.texto}`)
-      .join('\n');
-
-    // Usamos fetch nativo de Node 22+
-    const gRes = await fetch('https://api.ai.google/v1/generate', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gemini-2.5-flash',
-        input: `Contexto de agenda:\n${contextText}\n\nUsuario: ${prompt}`
-      })
-    });
-
-    if(!gRes.ok) throw new Error(`Error Gemini: ${gRes.status} ${gRes.statusText}`);
-
-    const json = await gRes.json();
-    const respuesta = json.output_text || 'Respuesta de Gemini';
-
-    // Parseamos posibles nuevas tareas JSON
-    let nuevasTareas = [];
-    try {
-      const match = respuesta.match(/\{.*\}/s);
-      if(match){
-        const tarea = JSON.parse(match[0]);
-        nuevasTareas = Array.isArray(tarea) ? tarea : [tarea];
-      }
-    } catch(e){
-      nuevasTareas = [];
-    }
-
-    // Añadir nuevas tareas y ordenar cronológicamente
-    if(nuevasTareas.length > 0){
-      agendaPersistente = agendaPersistente.concat(nuevasTareas);
-      agendaPersistente.sort((a,b)=>{
-        const t1 = new Date(`${a.fecha}T${a.hora}`);
-        const t2 = new Date(`${b.fecha}T${b.hora}`);
-        return t1 - t2;
-      });
-    }
-
-    res.json({
-      text: respuesta.replace(/\{.*\}/s, '').trim(),
-      agenda: agendaPersistente
-    });
-
-  } catch(err){
-    console.error('Error en /api/generate:', err);
-    res.status(500).send('Error en el servidor: ' + err.toString());
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Proxy Gemini corriendo en puerto ${PORT}`));
