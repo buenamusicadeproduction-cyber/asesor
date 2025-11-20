@@ -36,33 +36,26 @@ app.post('/api/generate', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log(`Servidor proxy listo en puerto ${PORT}`));*/
 
-// server.js - ES Module
+// server.js - ES Module puro para Node 22+
 import express from 'express';
-import fetch from 'node-fetch';
 import cors from 'cors';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Agenda persistente en memoria
+// Agenda persistente
 let agendaPersistente = [];
 
-/**
- * POST /api/generate
- * Recibe { prompt } del cliente.
- * Llama a Gemini y devuelve { text, agenda }.
- * Gemini puede devolver nuevas tareas en JSON en la respuesta.
- */
 app.post('/api/generate', async (req, res) => {
   const { prompt } = req.body;
 
   try {
-    // Incluimos la agenda actual en el contexto
     const contextText = agendaPersistente
       .map(t => `${t.fecha} ${t.hora}: ${t.titulo} - ${t.texto}`)
       .join('\n');
 
+    // Usamos fetch nativo de Node 22+
     const gRes = await fetch('https://api.ai.google/v1/generate', {
       method: 'POST',
       headers: {
@@ -75,23 +68,24 @@ app.post('/api/generate', async (req, res) => {
       })
     });
 
+    if(!gRes.ok) throw new Error(`Error Gemini: ${gRes.status} ${gRes.statusText}`);
+
     const json = await gRes.json();
     const respuesta = json.output_text || 'Respuesta de Gemini';
 
-    // Intentamos parsear tareas nuevas si Gemini devuelve JSON
+    // Parseamos posibles nuevas tareas JSON
     let nuevasTareas = [];
     try {
-      const match = respuesta.match(/\{.*\}/s); // busca JSON en la respuesta
+      const match = respuesta.match(/\{.*\}/s);
       if(match){
         const tarea = JSON.parse(match[0]);
-        if(Array.isArray(tarea)) nuevasTareas = tarea;
-        else nuevasTareas = [tarea];
+        nuevasTareas = Array.isArray(tarea) ? tarea : [tarea];
       }
     } catch(e){
       nuevasTareas = [];
     }
 
-    // Añadir nuevas tareas a la agenda y ordenar cronológicamente
+    // Añadir nuevas tareas y ordenar cronológicamente
     if(nuevasTareas.length > 0){
       agendaPersistente = agendaPersistente.concat(nuevasTareas);
       agendaPersistente.sort((a,b)=>{
@@ -101,7 +95,6 @@ app.post('/api/generate', async (req, res) => {
       });
     }
 
-    // Devolver texto de Gemini + agenda actualizada
     res.json({
       text: respuesta.replace(/\{.*\}/s, '').trim(),
       agenda: agendaPersistente
