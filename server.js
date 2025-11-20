@@ -24,7 +24,8 @@ app.post("/ia", async (req, res) => {
     }
 
     // ⭐⭐⭐ ESTA ES LA LINEA CORRECTA ⭐⭐⭐
-    const result = await model.generateContent(message);
+    const result = await model.generateContent([{ role: "user", parts: [{ text: message }]}]);
+
 
     const reply = result?.response?.text() || "Sin respuesta del modelo";
 
@@ -40,4 +41,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
   console.log("Servidor IA funcionando en puerto " + PORT)
 );
+
 
