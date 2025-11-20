@@ -16,45 +16,37 @@ app.use(express.json());
 
 
 // Gemini endpoint (REST)
-const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
-
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 app.post('/api/generate', async (req, res) => {
-const { prompt } = req.body;
+  const {prompt} = req.body;
 
+  try {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${process.env.GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: prompt }]
+          }
+        ]
+      })
+    });
 
-if (!process.env.GEMINI_API_KEY) {
-return res.status(500).json({ error: "Falta GEMINI_API_KEY" });
-}
+    const data = await response.json();
 
+    const parts = data.candidates?.[0]?.content?.parts;
+    const text = parts?.map(p => p.text).join(" ") || "(Sin respuesta)";
 
-try {
-const response = await fetch(`${GEMINI_ENDPOINT}?key=${process.env.GEMINI_API_KEY}`, {
-method: "POST",
-headers: {
-"Content-Type": "application/json"
-},
-body: JSON.stringify({
-contents: [{
-parts: [{ text: prompt }]
-}]
-})
-});
-
-
-const data = await response.json();
-
-
-const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "(Sin respuesta)";
-
-
-res.json({ text });
-} catch (err) {
-console.error("Error en /api/generate:", err);
-res.status(500).json({ error: "Error interno del servidor" });
-}
+    res.json({ text });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ text: "Error interno del servidor"});
+  }
 });
 
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor listo en puerto ${PORT}`));
+
