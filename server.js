@@ -11,10 +11,30 @@ app.use(express.json());
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
-// ----- memoria persistente en RAM -----
+// ---------- MEMORIA PERSISTENTE DE LA AGENDA ----------
 let agendaPersistente = [];
 
-// helper para formatear la agenda como contexto
+// ---------- FUNCIONES ----------
+function hoyISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function fechaRelativaToISO(texto) {
+  // reemplazo en prompt antes de mandarlo a Gemini
+  const hoy = new Date();
+
+  if (/mañana/i.test(texto)) {
+    const d = new Date(hoy); d.setDate(hoy.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+  if (/pasado mañana/i.test(texto)) {
+    const d = new Date(hoy); d.setDate(hoy.getDate() + 2);
+    return d.toISOString().slice(0, 10);
+  }
+
+  return null; // si no se detecta nada, se deja a Gemini
+}
+
 function agendaToContext() {
   if (agendaPersistente.length === 0) return "Agenda vacía.";
   return agendaPersistente
@@ -22,80 +42,130 @@ function agendaToContext() {
     .join("\n");
 }
 
+function ordenarAgenda() {
+  agendaPersistente.sort((a, b) => {
+    const t1 = new Date(`${a.fecha}T${a.hora}`);
+    const t2 = new Date(`${b.fecha}T${b.hora}`);
+    return t1 - t2;
+  });
+}
+
+// ---------- API ----------
 app.post("/api/generate", async (req, res) => {
-  const { prompt } = req.body;
+  let { prompt } = req.body;
   if (!prompt) return res.status(400).json({ text: "Falta prompt" });
 
-  try {
-    // enviamos al modelo el contexto con toda la agenda
-    const mensaje =
-      "Contexto de agenda del usuario:\n" +
-      agendaToContext() +
-      "\n\n" +
-      "Cuando el usuario te pida crear o modificar eventos, responde así:\n" +
-      "1) Tu respuesta normal para mostrar al usuario.\n" +
-      "2) Al final incluye SOLO UN bloque JSON con esta forma exacta si procede:\n" +
-      `{
-  "fecha":"AAAA-MM-DD",
-  "hora":"HH:MM",
-  "titulo":"Texto corto",
-  "texto":"Descripción breve"
-}\n` +
-      "\nUsuario: " +
-      prompt;
+  // -------- INTERPRETAR FECHAS RELATIVAS ANTES DE ENVIAR A GEMINI --------
+  const fechaRel = fechaRelativaToISO(prompt);
+  if (fechaRel) {
+    prompt += ` (Interpretado: fecha = ${fechaRel})`;
+  }
 
+  // -------- INSTRUCCIONES A GEMINI ----------
+  const systemPrompt =
+    `Hoy es: ${hoyISO()}
+
+Reglas:
+1) Cuando el usuario diga "mañana", "pasado mañana", "el lunes", "el viernes", etc., interpreta usando la fecha REAL de hoy (${hoyISO()}). **No uses 2024.**
+2) Si el usuario pide CREAR una cita, al final incluye EXACTAMENTE un bloque JSON con esta forma:
+{
+  "accion": "crear",
+  "fecha": "AAAA-MM-DD",
+  "hora": "HH:MM",
+  "titulo": "Texto corto",
+  "texto": "Descripción breve"
+}
+3) Si el usuario pide BORRAR una cita, incluye un JSON así:
+{
+  "accion": "borrar",
+  "titulo": "texto para buscar",
+  "fecha": "opcional",
+  "hora": "opcional"
+}
+4) No incluyas explicación dentro del JSON.
+5) La respuesta normal para el usuario debe ir **antes**, fuera del JSON.
+6) No inventes fechas antiguas (como 2024).`;
+
+  const mensaje =
+    "Agenda actual del usuario:\n" +
+    agendaToContext() +
+    "\n\n" +
+    systemPrompt +
+    "\n\nUsuario: " +
+    prompt;
+
+  try {
+    // -------- LLAMADA A GEMINI --------
     const response = await fetch(
       `${GEMINI_ENDPOINT}?key=${process.env.GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: mensaje }] }],
-        }),
+        body: JSON.stringify({ contents: [{ parts: [{ text: mensaje }] }] }),
       }
     );
 
     const data = await response.json();
     const parts = data.candidates?.[0]?.content?.parts;
-    const text = parts?.map((p) => p.text).join(" ") || "(Sin respuesta)";
+    const fullText =
+      parts?.map((p) => p.text).join(" ") || "(Sin respuesta)";
 
-    // ----- buscar JSON de nueva tarea -----
-    let nuevasTareas = [];
-    const match = text.match(/\{[\s\S]*\}/); // primer bloque JSON
+    // -------- EXTRAER JSON --------
+    const match = fullText.match(/\{[\s\S]*\}/);
+    let accion = null;
+
     if (match) {
       try {
-        const tarea = JSON.parse(match[0]);
-        nuevasTareas = Array.isArray(tarea) ? tarea : [tarea];
-      } catch (e) {
-        console.log("JSON ignorado:", e);
+        accion = JSON.parse(match[0]);
+      } catch {}
+    }
+
+    // -------- PROCESAR ACCIÓN --------
+    if (accion) {
+      if (accion.accion === "crear") {
+        agendaPersistente.push({
+          fecha: accion.fecha,
+          hora: accion.hora,
+          titulo: accion.titulo,
+          texto: accion.texto,
+        });
+        ordenarAgenda();
+      }
+
+      if (accion.accion === "borrar") {
+        agendaPersistente = agendaPersistente.filter((t) => {
+          // se borra si coincide por título
+          const coincideTitulo =
+            t.titulo.toLowerCase().includes(
+              (accion.titulo || "").toLowerCase()
+            );
+
+          const coincideFecha =
+            !accion.fecha || t.fecha === accion.fecha;
+
+          const coincideHora =
+            !accion.hora || t.hora === accion.hora;
+
+          return !(coincideTitulo && coincideFecha && coincideHora);
+        });
       }
     }
 
-    // ----- si hay nuevas tareas, guardarlas -----
-    if (nuevasTareas.length > 0) {
-      agendaPersistente = agendaPersistente.concat(nuevasTareas);
-      // ordenar
-      agendaPersistente.sort((a, b) => {
-        const t1 = new Date(`${a.fecha}T${a.hora}`);
-        const t2 = new Date(`${b.fecha}T${b.hora}`);
-        return t1 - t2;
-      });
-    }
-
-    // el texto mostrado al usuario se limpia de JSON
-    const textoLimpio = text.replace(/\{[\s\S]*\}/, "").trim();
+    // -------- TEXTO LIMPIO PARA MOSTRAR --------
+    const textoLimpio = fullText.replace(/\{[\s\S]*\}/, "").trim();
 
     res.json({
       text: textoLimpio,
       agenda: agendaPersistente,
     });
   } catch (err) {
-    console.error(err);
+    console.error("Error:", err);
     res.status(500).json({ text: "Error interno del servidor" });
   }
 });
 
+// ---------- INICIO ----------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
-  console.log(`Servidor proxy listo en puerto ${PORT}`)
+  console.log(`Servidor listo en puerto ${PORT}`)
 );
